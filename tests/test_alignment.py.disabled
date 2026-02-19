@@ -1,0 +1,103 @@
+"""
+Tests for ICP alignment functionality.
+"""
+
+import pytest
+import numpy as np
+
+try:
+    import open3d as o3d
+    HAS_OPEN3D = True
+except ImportError:
+    HAS_OPEN3D = False
+    pytestmark = pytest.mark.skip(reason="open3d not installed")
+
+from toolkit.alignment import ICPAligner, MultiScaleICP, AlignmentResult
+
+
+@pytest.fixture
+def sample_point_clouds():
+    """Create sample point clouds for testing."""
+    # Create sphere point cloud
+    sphere = o3d.geometry.TriangleMesh.create_sphere(radius=1.0)
+    source = sphere.sample_points_uniformly(number_of_points=500)
+    
+    # Create transformed target
+    target = o3d.geometry.PointCloud(source)
+    transformation = np.array([
+        [0.866, -0.5, 0, 0.1],
+        [0.5, 0.866, 0, 0.2],
+        [0, 0, 1, 0.3],
+        [0, 0, 0, 1]
+    ])
+    target = target.transform(transformation)
+    
+    return source, target
+
+
+def test_icp_aligner_initialization():
+    """Test ICPAligner initialization."""
+    aligner = ICPAligner(max_iterations=50, max_correspondence_distance=0.5)
+    assert aligner.max_iterations == 50
+    assert aligner.max_correspondence_distance == 0.5
+
+
+def test_icp_alignment(sample_point_clouds):
+    """Test basic ICP alignment."""
+    source, target = sample_point_clouds
+    
+    aligner = ICPAligner(max_iterations=100)
+    result = aligner.align(source, target)
+    
+    assert isinstance(result, AlignmentResult)
+    assert result.transformation.shape == (4, 4)
+    assert 0 <= result.fitness <= 1
+    assert result.rmse >= 0
+
+
+def test_icp_variants(sample_point_clouds):
+    """Test different ICP variants."""
+    source, target = sample_point_clouds
+    
+    # Point-to-point
+    aligner_p2p = ICPAligner(variant="point_to_point")
+    result_p2p = aligner_p2p.align(source, target)
+    assert result_p2p.fitness > 0
+    
+    # Point-to-plane
+    aligner_p2s = ICPAligner(variant="point_to_plane")
+    result_p2s = aligner_p2s.align(source, target)
+    assert result_p2s.fitness > 0
+
+
+def test_transform_point_cloud(sample_point_clouds):
+    """Test point cloud transformation."""
+    source, target = sample_point_clouds
+    
+    aligner = ICPAligner()
+    transformation = np.eye(4)
+    transformation[0, 3] = 1.0  # Translate X by 1
+    
+    transformed = aligner.transform_point_cloud(source, transformation)
+    
+    source_points = np.asarray(source.points)
+    transformed_points = np.asarray(transformed.points)
+    
+    expected = source_points + np.array([1.0, 0, 0])
+    np.testing.assert_array_almost_equal(transformed_points, expected)
+
+
+def test_multiscale_icp(sample_point_clouds):
+    """Test multi-scale ICP alignment."""
+    source, target = sample_point_clouds
+    
+    aligner = MultiScaleICP()
+    result = aligner.align(source, target)
+    
+    assert isinstance(result, AlignmentResult)
+    assert result.transformation.shape == (4, 4)
+    assert result.fitness > 0
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

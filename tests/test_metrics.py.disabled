@@ -1,0 +1,165 @@
+"""
+Tests for geometric metrics.
+"""
+
+import pytest
+import numpy as np
+
+try:
+    import open3d as o3d
+    HAS_OPEN3D = True
+except ImportError:
+    HAS_OPEN3D = False
+    pytestmark = pytest.mark.skip(reason="open3d not installed")
+
+try:
+    import trimesh
+    HAS_TRIMESH = True
+except ImportError:
+    HAS_TRIMESH = False
+    pytestmark = pytest.mark.skip(reason="trimesh not installed")
+
+from toolkit.metrics import (
+    ChamferDistance, PointToSurfaceDistance, HausdorffDistance,
+    VolumeError, SurfaceAreaError
+)
+
+
+@pytest.fixture
+def sample_point_clouds():
+    """Create sample point clouds for testing."""
+    # Create two spheres
+    sphere1 = o3d.geometry.TriangleMesh.create_sphere(radius=1.0)
+    source = sphere1.sample_points_uniformly(number_of_points=500)
+    
+    sphere2 = o3d.geometry.TriangleMesh.create_sphere(radius=1.0)
+    target = sphere2.sample_points_uniformly(number_of_points=500)
+    
+    return source, target
+
+
+@pytest.fixture
+def sample_meshes():
+    """Create sample meshes for testing."""
+    mesh1 = trimesh.creation.box(extents=[1, 1, 1])
+    mesh2 = trimesh.creation.box(extents=[1, 1, 1])
+    
+    return mesh1, mesh2
+
+
+def test_chamfer_distance(sample_point_clouds):
+    """Test Chamfer distance calculation."""
+    source, target = sample_point_clouds
+    
+    calc = ChamferDistance()
+    distance = calc.compute(source, target)
+    
+    assert isinstance(distance, float)
+    assert distance >= 0
+
+
+def test_chamfer_distance_detailed(sample_point_clouds):
+    """Test detailed Chamfer distance."""
+    source, target = sample_point_clouds
+    
+    calc = ChamferDistance()
+    result = calc.compute_detailed(source, target)
+    
+    assert 'chamfer_distance' in result
+    assert 's2t_mean' in result
+    assert 't2s_mean' in result
+    assert all(v >= 0 for v in result.values())
+
+
+def test_chamfer_distance_identical(sample_point_clouds):
+    """Test Chamfer distance for identical clouds."""
+    source, _ = sample_point_clouds
+    
+    calc = ChamferDistance()
+    distance = calc.compute(source, source)
+    
+    assert distance < 1e-6
+
+
+def test_hausdorff_distance(sample_point_clouds):
+    """Test Hausdorff distance."""
+    source, target = sample_point_clouds
+    
+    calc = HausdorffDistance()
+    distance = calc.compute(source, target)
+    
+    assert isinstance(distance, float)
+    assert distance >= 0
+
+
+def test_hausdorff_distance_directed(sample_point_clouds):
+    """Test directed Hausdorff distance."""
+    source, target = sample_point_clouds
+    
+    calc = HausdorffDistance()
+    d_s2t, d_t2s = calc.compute_directed(source, target)
+    
+    assert isinstance(d_s2t, float)
+    assert isinstance(d_t2s, float)
+    assert d_s2t >= 0 and d_t2s >= 0
+
+
+def test_point_to_surface_distance():
+    """Test point-to-surface distance."""
+    # Create mesh and sample points
+    mesh = trimesh.creation.sphere(radius=1.0)
+    points = np.array([
+        [0, 0, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1]
+    ])
+    
+    calc = PointToSurfaceDistance()
+    distance = calc.compute(points, mesh)
+    
+    assert isinstance(distance, float)
+    assert distance >= 0
+
+
+def test_point_to_surface_distance_detailed():
+    """Test detailed point-to-surface distance."""
+    mesh = trimesh.creation.sphere(radius=1.0)
+    points = np.array([
+        [0, 0, 0],
+        [1, 0, 0],
+        [0, 1, 0],
+    ])
+    
+    calc = PointToSurfaceDistance()
+    result = calc.compute_detailed(points, mesh)
+    
+    assert 'p2s_distance' in result
+    assert 'p2s_std' in result
+    assert 'p2s_max' in result
+
+
+def test_volume_error(sample_meshes):
+    """Test volume error calculation."""
+    mesh1, mesh2 = sample_meshes
+    
+    calc = VolumeError()
+    error = calc.compute(mesh1, mesh2)
+    
+    assert isinstance(error, float)
+    assert error >= 0
+
+
+def test_surface_area_error(sample_meshes):
+    """Test surface area error."""
+    mesh1, mesh2 = sample_meshes
+    
+    calc = SurfaceAreaError()
+    error = calc.compute(mesh1, mesh2)
+    
+    assert isinstance(error, float)
+    assert error >= 0
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

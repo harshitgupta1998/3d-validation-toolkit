@@ -1,0 +1,165 @@
+"""
+Tests for regression test framework.
+"""
+
+import pytest
+import json
+from pathlib import Path
+import tempfile
+
+try:
+    import open3d as o3d
+    HAS_OPEN3D = True
+except ImportError:
+    HAS_OPEN3D = False
+    pytestmark = pytest.mark.skip(reason="open3d not installed")
+
+from toolkit.regression import RegressionTest, RegressionTestResult, QualityGate
+
+
+@pytest.fixture
+def temp_dir():
+    """Create temporary directory for tests."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yield tmpdir
+
+
+@pytest.fixture
+def sample_point_clouds(temp_dir):
+    """Create sample point clouds and save to files."""
+    # Create source cloud
+    sphere1 = o3d.geometry.TriangleMesh.create_sphere(radius=1.0)
+    source = sphere1.sample_points_uniformly(number_of_points=300)
+    source_path = Path(temp_dir) / "source.ply"
+    o3d.io.write_point_cloud(str(source_path), source)
+    
+    # Create target cloud
+    sphere2 = o3d.geometry.TriangleMesh.create_sphere(radius=1.0)
+    target = sphere2.sample_points_uniformly(number_of_points=300)
+    target_path = Path(temp_dir) / "target.ply"
+    o3d.io.write_point_cloud(str(target_path), target)
+    
+    return str(source_path), str(target_path)
+
+
+def test_regression_test_initialization(temp_dir):
+    """Test RegressionTest initialization."""
+    test = RegressionTest(
+        golden_dir=temp_dir,
+        output_dir=Path(temp_dir) / "results"
+    )
+    assert test.golden_dir == Path(temp_dir)
+    assert (Path(temp_dir) / "results").exists()
+
+
+def test_add_quality_gate(temp_dir):
+    """Test adding quality gates."""
+    test = RegressionTest(golden_dir=temp_dir, output_dir=Path(temp_dir) / "results")
+    
+    test.add_quality_gate("chamfer_distance", "chamfer", 0.05, "<=")
+    
+    assert "chamfer_distance" in test.quality_gates
+    assert test.quality_gates["chamfer_distance"].threshold == 0.05
+
+
+def test_check_gate(temp_dir):
+    """Test quality gate checking."""
+    test = RegressionTest(golden_dir=temp_dir, output_dir=Path(temp_dir) / "results")
+    test.add_quality_gate("test_gate", "chamfer", 0.05, "<=")
+    
+    gate = test.quality_gates["test_gate"]
+    
+    assert test._check_gate(gate, 0.03) == True
+    assert test._check_gate(gate, 0.05) == True
+    assert test._check_gate(gate, 0.07) == False
+
+
+def test_compute_metrics(sample_point_clouds, temp_dir):
+    """Test metric computation."""
+    source_path, target_path = sample_point_clouds
+    
+    test = RegressionTest(golden_dir=temp_dir, output_dir=Path(temp_dir) / "results")
+    metrics = test.compute_metrics(source_path, target_path)
+    
+    assert 'chamfer_distance' in metrics
+    assert 'hausdorff_distance' in metrics
+    assert isinstance(metrics['chamfer_distance'], float)
+
+
+def test_run_single_test(sample_point_clouds, temp_dir):
+    """Test running a single regression test."""
+    source_path, target_path = sample_point_clouds
+    
+    test = RegressionTest(golden_dir=temp_dir, output_dir=Path(temp_dir) / "results")
+    test.add_quality_gate("chamfer_distance", "chamfer", 1.0, "<=")
+    
+    result = test.run("test1", source_path, target_path)
+    
+    assert isinstance(result, RegressionTestResult)
+    assert result.test_name == "test1"
+    assert len(result.metrics) > 0
+    assert len(result.quality_gates) > 0
+
+
+def test_run_batch_tests(sample_point_clouds, temp_dir):
+    """Test running batch regression tests."""
+    source_path, target_path = sample_point_clouds
+    
+    test = RegressionTest(golden_dir=temp_dir, output_dir=Path(temp_dir) / "results")
+    test.add_quality_gate("chamfer_distance", "chamfer", 1.0, "<=")
+    
+    test_cases = [
+        ("test1", source_path, target_path),
+        ("test2", source_path, target_path),
+    ]
+    
+    results = test.run_batch(test_cases)
+    
+    assert len(results) == 2
+    assert all(isinstance(r, RegressionTestResult) for r in results)
+
+
+def test_generate_summary(sample_point_clouds, temp_dir):
+    """Test summary generation."""
+    source_path, target_path = sample_point_clouds
+    
+    test = RegressionTest(golden_dir=temp_dir, output_dir=Path(temp_dir) / "results")
+    test.add_quality_gate("chamfer_distance", "chamfer", 1.0, "<=")
+    
+    test_cases = [
+        ("test1", source_path, target_path),
+        ("test2", source_path, target_path),
+    ]
+    
+    results = test.run_batch(test_cases)
+    summary = test.generate_summary(results)
+    
+    assert summary['total_tests'] == 2
+    assert 'metric_statistics' in summary
+    assert 'pass_rate' in summary
+
+
+def test_save_summary(sample_point_clouds, temp_dir):
+    """Test saving summary to file."""
+    source_path, target_path = sample_point_clouds
+    
+    test = RegressionTest(golden_dir=temp_dir, output_dir=Path(temp_dir) / "results")
+    test.add_quality_gate("chamfer_distance", "chamfer", 1.0, "<=")
+    
+    test_cases = [
+        ("test1", source_path, target_path),
+    ]
+    
+    results = test.run_batch(test_cases)
+    summary_file = test.save_summary(results)
+    
+    assert Path(summary_file).exists()
+    
+    # Verify content
+    with open(summary_file, 'r') as f:
+        data = json.load(f)
+        assert 'total_tests' in data
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])
